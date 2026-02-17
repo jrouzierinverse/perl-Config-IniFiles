@@ -20,7 +20,7 @@ type IniFile struct {
 	// Ordered list of section names
 	sects []string
 	// Section existence map
-	sectExists map[string]bool
+	sectExists map[string]struct{}
 
 	// Values: values[section][param] = []string
 	values map[string]map[string][]string
@@ -43,27 +43,27 @@ type IniFile struct {
 	trailingComments []string
 
 	// Configuration options
-	filename             string
-	defaultSect          string
-	fallbackSect         string
-	nocase               bool
-	allowContinue        bool
-	allowEmpty           bool
-	noMultiline          bool
-	negativedeltas       bool
+	filename              string
+	defaultSect           string
+	fallbackSect          string
+	nocase                bool
+	allowContinue         bool
+	allowEmpty            bool
+	noMultiline           bool
+	negativedeltas        bool
 	handleTrailingComment bool
-	phpCompat            bool
-	commentChar          string
-	allowedCommentChars  string
-	writeMode            os.FileMode
-	lineEnding           string
+	phpCompat             bool
+	commentChar           string
+	allowedCommentChars   string
+	writeMode             os.FileMode
+	lineEnding            string
 
 	// Import support
 	imported *IniFile
 
 	// Delta tracking: which sections/params were modified by user
-	mysects  map[string]bool
-	myparms  map[string]map[string]bool
+	mysects map[string]struct{}
+	myparms map[string]map[string]struct{}
 
 	// Parse errors
 	errors []string
@@ -113,7 +113,7 @@ type Options struct {
 func New(opts Options) (*IniFile, error) {
 	ini := &IniFile{
 		sects:      make([]string, 0),
-		sectExists: make(map[string]bool),
+		sectExists: make(map[string]struct{}),
 		values:     make(map[string]map[string][]string),
 		params:     make(map[string][]string),
 		sCMT:       make(map[string][]string),
@@ -121,24 +121,24 @@ func New(opts Options) (*IniFile, error) {
 		peCMT:      make(map[string]map[string]string),
 		eot:        make(map[string]map[string]string),
 		groups:     make(map[string][]string),
-		mysects:    make(map[string]bool),
-		myparms:    make(map[string]map[string]bool),
+		mysects:    make(map[string]struct{}),
+		myparms:    make(map[string]map[string]struct{}),
 
-		commentChar:          "#",
-		allowedCommentChars:  "#;",
-		lineEnding:           "\n",
-		writeMode:            0666,
+		commentChar:         "#",
+		allowedCommentChars: "#;",
+		lineEnding:          "\n",
+		writeMode:           0666,
 
-		defaultSect:          opts.Default,
-		fallbackSect:         opts.Fallback,
-		nocase:               opts.NoCase,
-		allowContinue:        opts.AllowContinue,
-		allowEmpty:           opts.AllowEmpty,
-		noMultiline:          opts.NoMultiline,
-		negativedeltas:       opts.NegativeDeltas,
+		defaultSect:           opts.Default,
+		fallbackSect:          opts.Fallback,
+		nocase:                opts.NoCase,
+		allowContinue:         opts.AllowContinue,
+		allowEmpty:            opts.AllowEmpty,
+		noMultiline:           opts.NoMultiline,
+		negativedeltas:        opts.NegativeDeltas,
 		handleTrailingComment: opts.HandleTrailingComment,
-		phpCompat:            opts.PHPCompat,
-		filename:             opts.File,
+		phpCompat:             opts.PHPCompat,
+		filename:              opts.File,
 	}
 
 	if opts.CommentChar != "" {
@@ -263,7 +263,7 @@ func (ini *IniFile) readConfig(r io.Reader) error {
 
 	// Track params seen during this parse to distinguish "append multi-value"
 	// from "first override of an imported value".
-	seenParams := make(map[string]map[string]bool)
+	seenParams := make(map[string]map[string]struct{})
 
 	// Read all lines first to detect line endings
 	for scanner.Scan() {
@@ -498,9 +498,9 @@ func (ini *IniFile) ensureSection(sect string) {
 	if ini.nocase {
 		sect = strings.ToLower(sect)
 	}
-	if !ini.sectExists[sect] {
+	if _, ok := ini.sectExists[sect]; !ok {
 		ini.sects = append(ini.sects, sect)
-		ini.sectExists[sect] = true
+		ini.sectExists[sect] = struct{}{}
 		ini.values[sect] = make(map[string][]string)
 		ini.params[sect] = make([]string, 0)
 	}
@@ -509,13 +509,18 @@ func (ini *IniFile) ensureSection(sect string) {
 // addParamValues adds values for a parameter, appending if it already exists (multi-valued).
 // seenParams tracks which params have been seen during the current parse; if a param was
 // imported but is being seen for the first time in the overlay file, we replace instead of append.
-func (ini *IniFile) addParamValues(sect, param string, vals []string, comments []string, seenParams map[string]map[string]bool) {
+func (ini *IniFile) addParamValues(sect, param string, vals []string, comments []string, seenParams map[string]map[string]struct{}) {
 	if ini.nocase {
 		sect = strings.ToLower(sect)
 		param = strings.ToLower(param)
 	}
 
-	seen := seenParams != nil && seenParams[sect] != nil && seenParams[sect][param]
+	seen := false
+	if seenParams != nil {
+		if sp, ok := seenParams[sect]; ok {
+			_, seen = sp[param]
+		}
+	}
 
 	if _, exists := ini.values[sect][param]; !exists {
 		ini.params[sect] = append(ini.params[sect], param)
@@ -529,9 +534,9 @@ func (ini *IniFile) addParamValues(sect, param string, vals []string, comments [
 	// Mark as seen
 	if seenParams != nil {
 		if seenParams[sect] == nil {
-			seenParams[sect] = make(map[string]bool)
+			seenParams[sect] = make(map[string]struct{})
 		}
-		seenParams[sect][param] = true
+		seenParams[sect][param] = struct{}{}
 	}
 
 	if len(comments) > 0 {
@@ -547,7 +552,7 @@ func (ini *IniFile) removeSection(sect string) {
 	if ini.nocase {
 		sect = strings.ToLower(sect)
 	}
-	if !ini.sectExists[sect] {
+	if _, ok := ini.sectExists[sect]; !ok {
 		return
 	}
 	newSects := make([]string, 0, len(ini.sects))
@@ -573,7 +578,7 @@ func (ini *IniFile) removeParam(sect, param string) {
 		sect = strings.ToLower(sect)
 		param = strings.ToLower(param)
 	}
-	if !ini.sectExists[sect] {
+	if _, ok := ini.sectExists[sect]; !ok {
 		return
 	}
 	if _, ok := ini.values[sect][param]; !ok {
@@ -717,7 +722,8 @@ func (ini *IniFile) SectionExists(section string) bool {
 	if ini.nocase {
 		section = strings.ToLower(section)
 	}
-	return ini.sectExists[section]
+	_, ok := ini.sectExists[section]
+	return ok
 }
 
 // AddSection creates a new section. Does nothing if it already exists.
@@ -731,7 +737,7 @@ func (ini *IniFile) DeleteSection(section string) bool {
 	if ini.nocase {
 		section = strings.ToLower(section)
 	}
-	if !ini.sectExists[section] {
+	if _, ok := ini.sectExists[section]; !ok {
 		return false
 	}
 	ini.removeSection(section)
@@ -746,10 +752,10 @@ func (ini *IniFile) RenameSection(oldName, newName string, includeGroupMembers b
 		oldName = strings.ToLower(oldName)
 		newName = strings.ToLower(newName)
 	}
-	if !ini.sectExists[oldName] {
+	if _, ok := ini.sectExists[oldName]; !ok {
 		return false
 	}
-	if ini.sectExists[newName] {
+	if _, ok := ini.sectExists[newName]; ok {
 		return false
 	}
 
@@ -788,10 +794,10 @@ func (ini *IniFile) CopySection(oldName, newName string, includeGroupMembers boo
 		oldName = strings.ToLower(oldName)
 		newName = strings.ToLower(newName)
 	}
-	if !ini.sectExists[oldName] {
+	if _, ok := ini.sectExists[oldName]; !ok {
 		return false
 	}
-	if ini.sectExists[newName] {
+	if _, ok := ini.sectExists[newName]; ok {
 		return false
 	}
 
@@ -807,7 +813,7 @@ func (ini *IniFile) CopySection(oldName, newName string, includeGroupMembers boo
 					mParts := strings.SplitN(m, " ", 2)
 					if len(mParts) == 2 {
 						newMemberName := newParts[0] + " " + mParts[1]
-						if !ini.sectExists[newMemberName] {
+						if _, ok := ini.sectExists[newMemberName]; !ok {
 							ini.copySectionInternal(m, newMemberName)
 						}
 					}
@@ -1216,13 +1222,13 @@ func (ini *IniFile) OutputConfigToWriter(w io.Writer, delta bool) error {
 		// Only output sections that were modified
 		sectsToOutput = make([]string, 0)
 		for _, s := range ini.sects {
-			if ini.mysects[s] {
+			if _, ok := ini.mysects[s]; ok {
 				sectsToOutput = append(sectsToOutput, s)
 			}
 		}
 		// Output deleted sections as comments
 		for _, s := range ini.imported.sects {
-			if !ini.sectExists[s] {
+			if _, ok := ini.sectExists[s]; !ok {
 				fmt.Fprintf(bw, "%s [%s] is deleted%s", ini.commentChar, s, le)
 			}
 		}
@@ -1251,7 +1257,7 @@ func (ini *IniFile) OutputConfigToWriter(w io.Writer, delta bool) error {
 			paramsToOutput = make([]string, 0)
 			if mp, ok := ini.myparms[sect]; ok {
 				for _, p := range ini.params[sect] {
-					if mp[p] {
+					if _, ok := mp[p]; ok {
 						paramsToOutput = append(paramsToOutput, p)
 					}
 				}
@@ -1376,7 +1382,7 @@ func (ini *IniFile) String() string {
 // Delete clears all configuration data.
 func (ini *IniFile) Delete() {
 	ini.sects = make([]string, 0)
-	ini.sectExists = make(map[string]bool)
+	ini.sectExists = make(map[string]struct{})
 	ini.values = make(map[string]map[string][]string)
 	ini.params = make(map[string][]string)
 	ini.sCMT = make(map[string][]string)
@@ -1385,8 +1391,8 @@ func (ini *IniFile) Delete() {
 	ini.eot = make(map[string]map[string]string)
 	ini.groups = make(map[string][]string)
 	ini.trailingComments = nil
-	ini.mysects = make(map[string]bool)
-	ini.myparms = make(map[string]map[string]bool)
+	ini.mysects = make(map[string]struct{})
+	ini.myparms = make(map[string]map[string]struct{})
 }
 
 // ReadConfig re-reads the configuration file.
@@ -1397,7 +1403,7 @@ func (ini *IniFile) ReadConfig() error {
 
 	// Clear existing data but keep options
 	ini.sects = make([]string, 0)
-	ini.sectExists = make(map[string]bool)
+	ini.sectExists = make(map[string]struct{})
 	ini.values = make(map[string]map[string][]string)
 	ini.params = make(map[string][]string)
 	ini.sCMT = make(map[string][]string)
@@ -1426,7 +1432,7 @@ func (ini *IniFile) touchSection(section string) {
 	if ini.nocase {
 		section = strings.ToLower(section)
 	}
-	ini.mysects[section] = true
+	ini.mysects[section] = struct{}{}
 }
 
 // touchParameter marks a parameter as user-modified (for delta support).
@@ -1436,7 +1442,7 @@ func (ini *IniFile) touchParameter(section, param string) {
 		param = strings.ToLower(param)
 	}
 	if ini.myparms[section] == nil {
-		ini.myparms[section] = make(map[string]bool)
+		ini.myparms[section] = make(map[string]struct{})
 	}
-	ini.myparms[section][param] = true
+	ini.myparms[section][param] = struct{}{}
 }
