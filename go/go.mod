@@ -1,3 +1,3 @@
-module github.com/shlomif/perl-Config-IniFiles/go
+module github.com/jrouzierinverse/perl-Config-IniFiles/go
 
 go 1.25.6
